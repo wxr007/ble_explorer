@@ -1,0 +1,33 @@
+# Flutter 构建产物
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+pubspec.lock
+
+# Android 相关
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/local.properties
+
+# iOS 相关
+ios/Pods/
+ios/.symlinks/
+ios/DerivedData/
+ios/build/
+ios/Runner/GeneratedPluginRegistrant.*
+
+# IDE 配置（Android Studio/VS Code）
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# 系统临时文件
+.DS_Store
+Thumbs.db
