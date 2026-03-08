@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:ble_app/main.dart';
+import 'package:ble_explorer/main.dart';
 
 void main() {
   testWidgets('BLE Explorer app loads', (WidgetTester tester) async {

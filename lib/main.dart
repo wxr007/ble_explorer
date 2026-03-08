@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
+
+import 'permission_handler_android.dart';
 
 void main() {
   runApp(const BLEExplorerApp());
@@ -41,17 +42,14 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
   }
 
   Future<void> _requestPermissionsAndScan() async {
-    final bluetoothScan = await Permission.bluetoothScan.request();
-    final bluetoothConnect = await Permission.bluetoothConnect.request();
-    final location = await Permission.locationWhenInUse.request();
-
-    if (bluetoothScan.isGranted && bluetoothConnect.isGranted && location.isGranted) {
-      _startScan();
-    } else {
+    final granted = await requestPermissions();
+    if (!granted) {
       setState(() {
         _errorMessage = '需要蓝牙和位置权限才能扫描设备';
       });
+      return;
     }
+    _startScan();
   }
 
   Future<void> _startScan() async {
