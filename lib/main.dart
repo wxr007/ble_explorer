@@ -282,7 +282,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                                     children: service.characteristics.map((char) {
                                       return ListTile(
                                         leading: const Icon(Icons.tune),
-                                        title: Text('特征'),
+                                        title: const Text('特征'),
                                         subtitle: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
@@ -338,7 +338,7 @@ class CharacteristicPage extends StatefulWidget {
 class _CharacteristicPageState extends State<CharacteristicPage> {
   String? _readValue;
   final TextEditingController _writeController = TextEditingController();
-  List<String> _notifications = [];
+  final List<String> _notifications = [];
   bool _isSubscribed = false;
 
   Future<void> _read() async {
