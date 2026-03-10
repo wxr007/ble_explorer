@@ -31,7 +31,7 @@ class DeviceScanPage extends StatefulWidget {
 }
 
 class _DeviceScanPageState extends State<DeviceScanPage> {
-  List<BluetoothDevice> _devices = [];
+  List<ScanResult> _scanResults = [];
   bool _isScanning = false;
   String? _errorMessage;
 
@@ -55,18 +55,41 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
   Future<void> _startScan() async {
     setState(() {
       _isScanning = true;
-      _devices = [];
+      _scanResults = [];
       _errorMessage = null;
     });
 
     try {
+      // 确保蓝牙已开启
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        await FlutterBluePlus.turnOn();
+        await Future.delayed(const Duration(seconds: 2)); // 等待蓝牙开启
+      }
+
+      // 监听扫描结果，去重并更新
       FlutterBluePlus.scanResults.listen((results) {
         setState(() {
-          _devices = results.map((r) => r.device).toList();
+          // 去重：根据设备地址
+          final uniqueResults = <ScanResult>[];
+          final seenAddresses = <String>{};
+          
+          for (var result in results) {
+            final address = result.device.remoteId.str;
+            if (!seenAddresses.contains(address)) {
+              seenAddresses.add(address);
+              uniqueResults.add(result);
+            }
+          }
+          
+          _scanResults = uniqueResults;
         });
       });
 
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+      // 使用更详细的扫描参数
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 15), // 进一步延长扫描时间
+      );
     } catch (e) {
       setState(() {
         _errorMessage = '扫描失败: $e';
@@ -78,17 +101,20 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
     }
   }
 
-  String _getDeviceName(BluetoothDevice device) {
-    return device.platformName.isNotEmpty ? device.platformName : 'Unknown Device';
+  String _getDeviceName(ScanResult result) {
+    // 优先从广播数据中提取设备名称
+    if (result.advertisementData.localName.isNotEmpty) {
+      return result.advertisementData.localName;
+    }
+    // 其次使用设备平台名称
+    if (result.device.platformName.isNotEmpty) {
+      return result.device.platformName;
+    }
+    return 'Unknown Device';
   }
 
-  int? _getRssi(List<ScanResult> results, String address) {
-    for (var r in results) {
-      if (r.device.remoteId.str == address) {
-        return r.rssi;
-      }
-    }
-    return null;
+  int _getRssi(ScanResult result) {
+    return result.rssi;
   }
 
   @override
@@ -127,34 +153,29 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
                 const SizedBox(width: 8),
-                Text(_isScanning ? '扫描中...' : '共发现 ${_devices.length} 个设备'),
+                Text(_isScanning ? '扫描中...' : '共发现 ${_scanResults.length} 个设备'),
               ],
             ),
           ),
           Expanded(
-            child: _devices.isEmpty && !_isScanning
+            child: _scanResults.isEmpty && !_isScanning
                 ? const Center(child: Text('点击右上角刷新按钮开始扫描'))
                 : ListView.builder(
-                    itemCount: _devices.length,
+                    itemCount: _scanResults.length,
                     itemBuilder: (context, index) {
-                      final device = _devices[index];
-                      return FutureBuilder<List<ScanResult>>(
-                        future: FlutterBluePlus.scanResults.first,
-                        builder: (context, snapshot) {
-                          final rssi = _getRssi(snapshot.data ?? [], device.remoteId.str);
-                          return ListTile(
-                            leading: const Icon(Icons.bluetooth),
-                            title: Text(_getDeviceName(device)),
-                            subtitle: Text('MAC: ${device.remoteId.str}${rssi != null ? "  RSSI: $rssi dBm" : ""}'),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => DeviceDetailPage(device: device),
-                                ),
-                              );
-                            },
+                      final result = _scanResults[index];
+                      final device = result.device;
+                      return ListTile(
+                        leading: const Icon(Icons.bluetooth),
+                        title: Text(_getDeviceName(result)),
+                        subtitle: Text('MAC: ${device.remoteId.str}  RSSI: ${_getRssi(result)} dBm'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => DeviceDetailPage(device: device),
+                            ),
                           );
                         },
                       );
