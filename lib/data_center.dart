@@ -5,6 +5,9 @@ class DataCenter {
   factory DataCenter() => _instance;
   DataCenter._internal();
 
+  // 日志最大行数
+  static const int maxLogLines = 200;
+
   // 蓝牙日志流
   final StreamController<String> _bluetoothLogController = StreamController<String>.broadcast();
   Stream<String> get bluetoothLogStream => _bluetoothLogController.stream;
@@ -33,11 +36,31 @@ class DataCenter {
   bool _isBaseStationConnected = false;
   bool get isBaseStationConnected => _isBaseStationConnected;
 
+  // 是否显示十六进制数据
+  bool _showHexData = true;
+  bool get showHexData => _showHexData;
+
+  // 十六进制显示状态流
+  final StreamController<bool> _showHexDataController = StreamController<bool>.broadcast();
+  Stream<bool> get showHexDataStream => _showHexDataController.stream;
+
+  // 设置十六进制显示
+  void setShowHexData(bool show) {
+    _showHexData = show;
+    _showHexDataController.add(show);
+  }
+
   // 添加蓝牙日志
   void addBluetoothLog(String log) {
     final timestamp = DateTime.now().toString().substring(11, 19);
     final logEntry = '[$timestamp] $log';
     _bluetoothLogs.add(logEntry);
+    
+    // 限制日志行数
+    if (_bluetoothLogs.length > maxLogLines) {
+      _bluetoothLogs.removeAt(0);
+    }
+    
     _bluetoothLogController.add(logEntry);
   }
 
@@ -46,6 +69,12 @@ class DataCenter {
     final timestamp = DateTime.now().toString().substring(11, 19);
     final logEntry = '[$timestamp] $log';
     _baseStationLogs.add(logEntry);
+    
+    // 限制日志行数
+    if (_baseStationLogs.length > maxLogLines) {
+      _baseStationLogs.removeAt(0);
+    }
+    
     _baseStationLogController.add(logEntry);
   }
 
@@ -98,5 +127,6 @@ class DataCenter {
   void dispose() {
     _bluetoothLogController.close();
     _baseStationLogController.close();
+    _showHexDataController.close();
   }
 }

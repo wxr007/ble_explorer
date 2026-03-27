@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../data_center.dart';
 
@@ -11,38 +12,79 @@ class LogPage extends StatefulWidget {
 class _LogPageState extends State<LogPage> {
   final TextEditingController _bluetoothLogController = TextEditingController();
   final TextEditingController _baseStationLogController = TextEditingController();
+  final ScrollController _bluetoothScrollController = ScrollController();
+  final ScrollController _baseStationScrollController = ScrollController();
+
+  StreamSubscription<String>? _bluetoothLogSubscription;
+  StreamSubscription<String>? _baseStationLogSubscription;
+  StreamSubscription<bool>? _showHexDataSubscription;
+
+  bool _showHexData = true;
 
   @override
   void initState() {
     super.initState();
+    _showHexData = DataCenter().showHexData;
     _bluetoothLogController.text = DataCenter().getBluetoothLogsText();
     _baseStationLogController.text = DataCenter().getBaseStationLogsText();
 
     // 监听日志更新
-    DataCenter().bluetoothLogStream.listen((log) {
+    _bluetoothLogSubscription = DataCenter().bluetoothLogStream.listen((log) {
       if (mounted) {
         setState(() {
           _bluetoothLogController.text = DataCenter().getBluetoothLogsText();
-          _scrollToBottom(_bluetoothLogController);
         });
+        _scrollToBottom(_bluetoothScrollController);
       }
     });
 
-    DataCenter().baseStationLogStream.listen((log) {
+    _baseStationLogSubscription = DataCenter().baseStationLogStream.listen((log) {
       if (mounted) {
         setState(() {
           _baseStationLogController.text = DataCenter().getBaseStationLogsText();
-          _scrollToBottom(_baseStationLogController);
+        });
+        _scrollToBottom(_baseStationScrollController);
+      }
+    });
+
+    // 监听十六进制显示设置变化
+    _showHexDataSubscription = DataCenter().showHexDataStream.listen((show) {
+      if (mounted) {
+        setState(() {
+          _showHexData = show;
         });
       }
     });
+
+    // 初始滚动到底部
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom(_bluetoothScrollController);
+      _scrollToBottom(_baseStationScrollController);
+    });
   }
 
-  void _scrollToBottom(TextEditingController controller) {
-    // 滚动到文本底部
-    controller.selection = TextSelection.fromPosition(
-      TextPosition(offset: controller.text.length),
-    );
+  @override
+  void dispose() {
+    _bluetoothLogSubscription?.cancel();
+    _baseStationLogSubscription?.cancel();
+    _showHexDataSubscription?.cancel();
+    _bluetoothScrollController.dispose();
+    _baseStationScrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom(ScrollController controller) {
+    if (controller.hasClients) {
+      controller.animateTo(
+        controller.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _toggleHexDisplay(bool value) {
+    DataCenter().setShowHexData(value);
   }
 
   @override
@@ -51,6 +93,20 @@ class _LogPageState extends State<LogPage> {
       appBar: AppBar(
         title: const Text('日志'),
         actions: [
+          // 十六进制显示开关
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '十六进制',
+                style: TextStyle(fontSize: 12),
+              ),
+              Switch(
+                value: _showHexData,
+                onChanged: _toggleHexDisplay,
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.clear_all),
             tooltip: '清空日志',
@@ -88,22 +144,33 @@ class _LogPageState extends State<LogPage> {
                         topRight: Radius.circular(3),
                       ),
                     ),
-                    child: const Text(
-                      '蓝牙日志',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          '蓝牙日志',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        Text(
+                          '(${DataCenter().bluetoothLogs.length}/${DataCenter.maxLogLines})',
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
                     ),
                   ),
                   Expanded(
-                    child: TextField(
-                      controller: _bluetoothLogController,
-                      maxLines: null,
-                      readOnly: true,
-                      expands: true,
-                      textAlignVertical: TextAlignVertical.top,
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.all(8),
-                        isDense: true,
+                    child: SingleChildScrollView(
+                      controller: _bluetoothScrollController,
+                      child: TextField(
+                        controller: _bluetoothLogController,
+                        maxLines: null,
+                        readOnly: true,
+                        textAlignVertical: TextAlignVertical.top,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.all(8),
+                          isDense: true,
+                        ),
                       ),
                     ),
                   ),
@@ -132,22 +199,33 @@ class _LogPageState extends State<LogPage> {
                         topRight: Radius.circular(3),
                       ),
                     ),
-                    child: const Text(
-                      '基站日志',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          '基站日志',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        Text(
+                          '(${DataCenter().baseStationLogs.length}/${DataCenter.maxLogLines})',
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
                     ),
                   ),
                   Expanded(
-                    child: TextField(
-                      controller: _baseStationLogController,
-                      maxLines: null,
-                      readOnly: true,
-                      expands: true,
-                      textAlignVertical: TextAlignVertical.top,
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.all(8),
-                        isDense: true,
+                    child: SingleChildScrollView(
+                      controller: _baseStationScrollController,
+                      child: TextField(
+                        controller: _baseStationLogController,
+                        maxLines: null,
+                        readOnly: true,
+                        textAlignVertical: TextAlignVertical.top,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.all(8),
+                          isDense: true,
+                        ),
                       ),
                     ),
                   ),

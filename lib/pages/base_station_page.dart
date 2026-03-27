@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../data_center.dart';
+import '../services/ntrip_client_service.dart';
 
 class BaseStationPage extends StatefulWidget {
   const BaseStationPage({super.key});
@@ -16,10 +18,30 @@ class _BaseStationPageState extends State<BaseStationPage> {
   final TextEditingController _passwordController = TextEditingController();
 
   int _selectedHistoryIndex = -1;
+  bool _isPasswordVisible = false;
+  bool _isConnecting = false;
+  bool _isConnected = false;
+  StreamSubscription<bool>? _connectionSubscription;
 
   @override
   void initState() {
     super.initState();
+    _isConnected = NtripClientService().isConnected;
+    // 监听连接状态变化
+    _connectionSubscription = NtripClientService().connectionStateStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          _isConnected = connected;
+          _isConnecting = NtripClientService().isConnecting;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectionSubscription?.cancel();
+    super.dispose();
   }
 
   void _loadHistory(int index) {
@@ -46,7 +68,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
     }
   }
 
-  void _connect() {
+  Future<void> _connect() async {
     if (_hostController.text.isEmpty || _portController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请填写主机和端口')),
@@ -64,18 +86,46 @@ class _BaseStationPageState extends State<BaseStationPage> {
     };
     DataCenter().addBaseStationHistory(history);
 
-    // 记录日志
-    DataCenter().addBaseStationLog('尝试连接: ${_hostController.text}:${_portController.text}');
-
-    // 连接逻辑
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('连接中...')),
-    );
-
-    // 模拟连接成功
-    Future.delayed(const Duration(seconds: 2), () {
-      DataCenter().setBaseStationConnected(true);
+    setState(() {
+      _isConnecting = true;
     });
+
+    try {
+      final port = int.tryParse(_portController.text) ?? 2101;
+      
+      await NtripClientService().connect(
+        host: _hostController.text,
+        port: port,
+        mountpoint: _mountpointController.text,
+        username: _usernameController.text,
+        password: _passwordController.text,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('NTRIP 连接成功')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('连接失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isConnecting = false;
+        });
+      }
+    }
+  }
+
+  void _disconnect() {
+    NtripClientService().disconnect();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已断开连接')),
+    );
   }
 
   @override
@@ -100,9 +150,13 @@ class _BaseStationPageState extends State<BaseStationPage> {
                 ...DataCenter().baseStationHistory.asMap().entries.map((entry) {
                   int index = entry.key;
                   Map<String, String> data = entry.value;
+                  String displayText = '${data['host']}:${data['port']}';
+                  if (data['mountpoint'] != null && data['mountpoint']!.isNotEmpty) {
+                    displayText += '/${data['mountpoint']}';
+                  }
                   return DropdownMenuItem<int>(
                     value: index,
-                    child: Text('${data['host']}:${data['port']}'),
+                    child: Text(displayText),
                   );
                 }),
               ],
@@ -156,25 +210,44 @@ class _BaseStationPageState extends State<BaseStationPage> {
             ),
             const SizedBox(height: 12),
 
+            // 密码输入框带可见性切换
             TextField(
               controller: _passwordController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: '密码',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _isPasswordVisible ? Icons.visibility_off : Icons.visibility,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _isPasswordVisible = !_isPasswordVisible;
+                    });
+                  },
+                ),
               ),
-              obscureText: true,
+              obscureText: !_isPasswordVisible,
             ),
             const SizedBox(height: 24),
 
-            // 连接按钮
-            ElevatedButton.icon(
-              onPressed: _connect,
-              icon: const Icon(Icons.connect_without_contact),
-              label: const Text('连接'),
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 50),
+            // 连接/断开按钮
+            if (_isConnecting)
+              const CircularProgressIndicator()
+            else
+              ElevatedButton.icon(
+                onPressed: _isConnected ? _disconnect : _connect,
+                icon: Icon(
+                  _isConnected ? Icons.link_off : Icons.connect_without_contact,
+                ),
+                label: Text(
+                  _isConnected ? '断开连接' : '连接',
+                ),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                  backgroundColor: _isConnected ? Colors.red : null,
+                ),
               ),
-            ),
           ],
         ),
       ),

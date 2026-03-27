@@ -124,10 +124,12 @@ ble_explorer/
 │   ├── main.dart              # App entry point with bottom navigation
 │   ├── data_center.dart       # Global data management class
 │   ├── permission_handler_android.dart  # Permission handling
-│   └── pages/
-│       ├── bluetooth_page.dart    # BLE device scanning page
-│       ├── base_station_page.dart # Base station connection page
-│       └── log_page.dart          # Log display page
+│   ├── pages/
+│   │   ├── bluetooth_page.dart    # BLE device scanning page
+│   │   ├── base_station_page.dart # Base station connection page
+│   │   └── log_page.dart          # Log display page
+│   └── services/
+│       └── ntrip_client_service.dart  # NTRIP client implementation
 ├── android/
 │   ├── app/src/main/
 │   │   └── AndroidManifest.xml  # BLE permissions
@@ -181,11 +183,21 @@ DataCenter().bluetoothLogStream.listen((log) {
   - 端口 (Port)
   - 挂载点 (Mountpoint)
   - 用户名 (Username)
-  - 密码 (Password)
+  - 密码 (Password) with Eye Toggle visibility switch
 - History dropdown to save and load previous connections
 - **新建连接**: Selecting "新建连接" clears all input fields
-- Connect button to establish connection
+- NTRIP Client connection support
+- Connect/Disconnect button with state management
 - Auto-saves connection history to DataCenter
+- Real-time data reception and logging
+
+### NTRIP Client Service
+- Custom NTRIP client implementation (`ntrip_client_service.dart`)
+- TCP socket connection to NTRIP caster
+- Basic authentication with Base64 encoding
+- RTCM data reception and parsing
+- Real-time data streaming to DataCenter
+- Connection state management
 
 ### Log Page
 - Two multi-line text fields to display:
