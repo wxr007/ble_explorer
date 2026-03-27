@@ -39,8 +39,23 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
   @override
   void initState() {
     super.initState();
-    _requestPermissionsAndScan();
     _searchController.addListener(_onSearchChanged);
+    // 智能扫描：超过30秒才重新扫描
+    if (DataCenter().shouldRescanBluetooth()) {
+      _requestPermissionsAndScan();
+    } else {
+      // 恢复之前的扫描结果（如果有）
+      _restorePreviousResults();
+    }
+  }
+
+  // 恢复之前的扫描结果
+  void _restorePreviousResults() {
+    // 这里可以添加从DataCenter恢复扫描结果的逻辑
+    // 目前只是显示提示
+    setState(() {
+      _isScanning = false;
+    });
   }
 
   @override
@@ -228,6 +243,9 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 15),
       );
+      
+      // 记录扫描时间
+      await DataCenter().updateLastBluetoothScanTime();
     } catch (e) {
       setState(() {
         _errorMessage = '扫描失败: $e';

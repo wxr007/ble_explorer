@@ -22,11 +22,13 @@ class _BaseStationPageState extends State<BaseStationPage> {
   bool _isConnecting = false;
   bool _isConnected = false;
   StreamSubscription<bool>? _connectionSubscription;
+  bool _isInitialized = false;
 
   @override
   void initState() {
     super.initState();
     _isConnected = NtripClientService().isConnected;
+    
     // 监听连接状态变化
     _connectionSubscription = NtripClientService().connectionStateStream.listen((connected) {
       if (mounted) {
@@ -36,10 +38,40 @@ class _BaseStationPageState extends State<BaseStationPage> {
         });
       }
     });
+
+    // 加载上次保存的配置
+    _loadLastConfig();
+  }
+
+  // 加载上次保存的配置
+  void _loadLastConfig() {
+    final lastConfig = DataCenter().getLastBaseStationConfig();
+    if (lastConfig != null && !_isInitialized) {
+      _hostController.text = lastConfig['host'] ?? '';
+      _portController.text = lastConfig['port'] ?? '';
+      _mountpointController.text = lastConfig['mountpoint'] ?? '';
+      _usernameController.text = lastConfig['username'] ?? '';
+      _passwordController.text = lastConfig['password'] ?? '';
+      _isInitialized = true;
+    }
+  }
+
+  // 保存当前配置
+  Future<void> _saveCurrentConfig() async {
+    final config = {
+      'host': _hostController.text,
+      'port': _portController.text,
+      'mountpoint': _mountpointController.text,
+      'username': _usernameController.text,
+      'password': _passwordController.text,
+    };
+    await DataCenter().saveLastBaseStationConfig(config);
   }
 
   @override
   void dispose() {
+    // 页面销毁时保存当前配置
+    _saveCurrentConfig();
     _connectionSubscription?.cancel();
     super.dispose();
   }
@@ -84,7 +116,10 @@ class _BaseStationPageState extends State<BaseStationPage> {
       'username': _usernameController.text,
       'password': _passwordController.text,
     };
-    DataCenter().addBaseStationHistory(history);
+    await DataCenter().addBaseStationHistory(history);
+    
+    // 保存当前配置
+    await _saveCurrentConfig();
 
     setState(() {
       _isConnecting = true;
@@ -179,6 +214,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
                 labelText: '主机',
                 border: OutlineInputBorder(),
               ),
+              onChanged: (_) => _saveCurrentConfig(),
             ),
             const SizedBox(height: 12),
 
@@ -189,6 +225,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
                 border: OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
+              onChanged: (_) => _saveCurrentConfig(),
             ),
             const SizedBox(height: 12),
 
@@ -198,6 +235,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
                 labelText: '挂载点',
                 border: OutlineInputBorder(),
               ),
+              onChanged: (_) => _saveCurrentConfig(),
             ),
             const SizedBox(height: 12),
 
@@ -207,6 +245,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
                 labelText: '用户名',
                 border: OutlineInputBorder(),
               ),
+              onChanged: (_) => _saveCurrentConfig(),
             ),
             const SizedBox(height: 12),
 
@@ -228,6 +267,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
                 ),
               ),
               obscureText: !_isPasswordVisible,
+              onChanged: (_) => _saveCurrentConfig(),
             ),
             const SizedBox(height: 24),
 

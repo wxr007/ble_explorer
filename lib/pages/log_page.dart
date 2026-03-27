@@ -19,7 +19,7 @@ class _LogPageState extends State<LogPage> {
   StreamSubscription<String>? _baseStationLogSubscription;
   StreamSubscription<bool>? _showHexDataSubscription;
 
-  bool _showHexData = true;
+  bool _showHexData = false;
 
   @override
   void initState() {
