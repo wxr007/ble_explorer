@@ -277,14 +277,14 @@ class _BaseStationPageState extends State<BaseStationPage> {
       appBar: AppBar(
         title: const Text('基站设置'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.file_upload),
-            tooltip: '导入配置',
+          TextButton.icon(
+            icon: const Icon(Icons.download, size: 20, color: Colors.black),
+            label: const Text('导入', style: TextStyle(fontSize: 12, color: Colors.black)),
             onPressed: _importConfig,
           ),
-          IconButton(
-            icon: const Icon(Icons.file_download),
-            tooltip: '导出配置',
+          TextButton.icon(
+            icon: const Icon(Icons.upload, size: 20, color: Colors.black),
+            label: const Text('导出', style: TextStyle(fontSize: 12, color: Colors.black)),
             onPressed: _exportConfig,
           ),
         ],

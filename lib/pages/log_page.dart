@@ -99,17 +99,18 @@ class _LogPageState extends State<LogPage> {
             children: [
               const Text(
                 '十六进制',
-                style: TextStyle(fontSize: 12),
+                style: TextStyle(fontSize: 12, color: Colors.black),
               ),
               Switch(
                 value: _showHexData,
                 onChanged: _toggleHexDisplay,
+                activeColor: Colors.black,
               ),
             ],
           ),
-          IconButton(
-            icon: const Icon(Icons.clear_all),
-            tooltip: '清空日志',
+          TextButton.icon(
+            icon: const Icon(Icons.delete_outline, size: 20, color: Colors.black),
+            label: const Text('清空', style: TextStyle(fontSize: 12, color: Colors.black)),
             onPressed: () {
               DataCenter().clearBluetoothLogs();
               DataCenter().clearBaseStationLogs();

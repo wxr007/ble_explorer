@@ -312,6 +312,85 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
     DataCenter().saveBluetoothScanResults(results);
   }
 
+  // 连接缓存的设备
+  Future<void> _connectToCachedDevice(CachedDevice cachedDevice) async {
+    // 先检查权限
+    final granted = await requestPermissions();
+    if (!granted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('需要蓝牙和位置权限')),
+      );
+      return;
+    }
+
+    // 显示扫描对话框
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 20),
+            Text('正在搜索设备...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      // 确保蓝牙已开启
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        await FlutterBluePlus.turnOn();
+        await Future.delayed(const Duration(seconds: 2));
+      }
+
+      // 开始扫描
+      BluetoothDevice? targetDevice;
+      
+      FlutterBluePlus.scanResults.listen((results) {
+        for (var result in results) {
+          if (result.device.remoteId.str == cachedDevice.address) {
+            targetDevice = result.device;
+            break;
+          }
+        }
+      });
+
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 5),
+      );
+
+      // 等待扫描完成
+      await Future.delayed(const Duration(seconds: 5));
+
+      // 关闭对话框
+      if (mounted) Navigator.pop(context);
+
+      if (targetDevice != null) {
+        // 找到设备，跳转到详情页
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DeviceDetailPage(device: targetDevice!),
+          ),
+        );
+      } else {
+        // 未找到设备
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未找到该设备，请确保设备在附近并已开启')),
+        );
+      }
+    } catch (e) {
+      // 关闭对话框
+      if (mounted) Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('连接失败: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -397,7 +476,7 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
     }
 
     if (_showingCached && _cachedDevices.isNotEmpty) {
-      // 显示缓存的设备列表
+      // 显示缓存的设备列表，点击可尝试连接
       return ListView.builder(
         itemCount: _cachedDevices.length,
         itemBuilder: (context, index) {
@@ -406,7 +485,8 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
             leading: const Icon(Icons.bluetooth, color: Colors.grey),
             title: Text(device.name),
             subtitle: Text('MAC: ${device.address}  RSSI: ${device.rssi} dBm'),
-            trailing: const Text('缓存', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            trailing: const Text('点击连接', style: TextStyle(color: Colors.blue, fontSize: 12)),
+            onTap: () => _connectToCachedDevice(device),
           );
         },
       );

@@ -194,6 +194,10 @@ class DataCenter {
     };
     final configJson = jsonEncode(config);
     
+    // 生成日期时间格式的文件名: 20240327_143052
+    final now = DateTime.now();
+    final dateTimeStr = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+    
     try {
       // 获取下载目录
       final directory = Directory('/storage/emulated/0/Download');
@@ -201,7 +205,7 @@ class DataCenter {
         await directory.create(recursive: true);
       }
       
-      final fileName = 'ble_explorer_config_${DateTime.now().millisecondsSinceEpoch}.json';
+      final fileName = 'ble_explorer_config_$dateTimeStr.json';
       final filePath = '${directory.path}/$fileName';
       
       final file = File(filePath);
@@ -213,7 +217,7 @@ class DataCenter {
       // 如果外部存储失败，尝试使用应用文档目录
       try {
         final directory = await getApplicationDocumentsDirectory();
-        final fileName = 'ble_explorer_config_${DateTime.now().millisecondsSinceEpoch}.json';
+        final fileName = 'ble_explorer_config_$dateTimeStr.json';
         final filePath = '${directory.path}/$fileName';
         
         final file = File(filePath);
