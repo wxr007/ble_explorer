@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 class DataCenter {
   static final DataCenter _instance = DataCenter._internal();
@@ -19,6 +21,7 @@ class DataCenter {
   static const String _keyLastBaseStationConfig = 'last_base_station_config';
   static const String _keyShowHexData = 'show_hex_data';
   static const String _keyLastBluetoothScan = 'last_bluetooth_scan';
+  static const String _keyBluetoothScanResults = 'bluetooth_scan_results';
 
   // 蓝牙日志流
   final StreamController<String> _bluetoothLogController = StreamController<String>.broadcast();
@@ -40,6 +43,10 @@ class DataCenter {
   List<Map<String, String>> _baseStationHistory = [];
   List<Map<String, String>> get baseStationHistory => List.unmodifiable(_baseStationHistory);
 
+  // 蓝牙扫描结果缓存
+  List<Map<String, dynamic>> _bluetoothScanResults = [];
+  List<Map<String, dynamic>> get bluetoothScanResults => List.unmodifiable(_bluetoothScanResults);
+
   // 当前蓝牙连接状态
   bool _isBluetoothConnected = false;
   bool get isBluetoothConnected => _isBluetoothConnected;
@@ -59,6 +66,10 @@ class DataCenter {
   // 上次蓝牙扫描时间
   DateTime? _lastBluetoothScanTime;
   DateTime? get lastBluetoothScanTime => _lastBluetoothScanTime;
+
+  // 当前选中的历史记录索引
+  int _selectedHistoryIndex = -1;
+  int get selectedHistoryIndex => _selectedHistoryIndex;
 
   // 初始化 SharedPreferences
   Future<void> _initPrefs() async {
@@ -88,6 +99,17 @@ class DataCenter {
     final lastScanMillis = _prefs!.getInt(_keyLastBluetoothScan);
     if (lastScanMillis != null) {
       _lastBluetoothScanTime = DateTime.fromMillisecondsSinceEpoch(lastScanMillis);
+    }
+
+    // 加载蓝牙扫描结果
+    final scanResultsJson = _prefs!.getString(_keyBluetoothScanResults);
+    if (scanResultsJson != null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(scanResultsJson);
+        _bluetoothScanResults = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+      } catch (e) {
+        _bluetoothScanResults = [];
+      }
     }
   }
 
@@ -135,11 +157,117 @@ class DataCenter {
     }
   }
 
+  // 保存蓝牙扫描结果
+  Future<void> saveBluetoothScanResults(List<Map<String, dynamic>> results) async {
+    _bluetoothScanResults = results;
+    if (_prefs != null) {
+      final resultsJson = jsonEncode(results);
+      await _prefs!.setString(_keyBluetoothScanResults, resultsJson);
+    }
+  }
+
+  // 获取蓝牙扫描结果
+  List<Map<String, dynamic>> getBluetoothScanResults() {
+    return _bluetoothScanResults;
+  }
+
   // 检查是否需要重新扫描（超过30秒）
   bool shouldRescanBluetooth() {
     if (_lastBluetoothScanTime == null) return true;
     final diff = DateTime.now().difference(_lastBluetoothScanTime!);
     return diff.inSeconds > 30;
+  }
+
+  // 设置选中的历史记录索引
+  void setSelectedHistoryIndex(int index) {
+    _selectedHistoryIndex = index;
+  }
+
+  // 导出配置到文件
+  Future<String?> exportConfig() async {
+    // 先准备配置数据
+    final config = {
+      'baseStationHistory': _baseStationHistory,
+      'lastBaseStationConfig': getLastBaseStationConfig(),
+      'showHexData': _showHexData,
+      'exportTime': DateTime.now().toIso8601String(),
+    };
+    final configJson = jsonEncode(config);
+    
+    try {
+      // 获取下载目录
+      final directory = Directory('/storage/emulated/0/Download');
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+      
+      final fileName = 'ble_explorer_config_${DateTime.now().millisecondsSinceEpoch}.json';
+      final filePath = '${directory.path}/$fileName';
+      
+      final file = File(filePath);
+      await file.writeAsString(configJson);
+      
+      return filePath;
+    } catch (e) {
+      print('导出配置失败: $e');
+      // 如果外部存储失败，尝试使用应用文档目录
+      try {
+        final directory = await getApplicationDocumentsDirectory();
+        final fileName = 'ble_explorer_config_${DateTime.now().millisecondsSinceEpoch}.json';
+        final filePath = '${directory.path}/$fileName';
+        
+        final file = File(filePath);
+        await file.writeAsString(configJson);
+        
+        return filePath;
+      } catch (e2) {
+        print('备用导出也失败: $e2');
+        return null;
+      }
+    }
+  }
+
+  // 获取配置文件路径（用于分享）
+  Future<String?> getConfigFilePath() async {
+    return await exportConfig();
+  }
+
+  // 从文件导入配置
+  Future<bool> importConfig(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final configJson = await file.readAsString();
+      final config = jsonDecode(configJson);
+
+      // 导入基站历史记录
+      if (config['baseStationHistory'] != null) {
+        final List<dynamic> history = config['baseStationHistory'];
+        _baseStationHistory = history.map((e) => Map<String, String>.from(e)).toList();
+        await _saveHistoryToPrefs();
+      }
+
+      // 导入上次基站配置
+      if (config['lastBaseStationConfig'] != null) {
+        final Map<String, dynamic> lastConfig = config['lastBaseStationConfig'];
+        await saveLastBaseStationConfig(
+          lastConfig.map((key, value) => MapEntry(key, value.toString())),
+        );
+      }
+
+      // 导入十六进制显示设置
+      if (config['showHexData'] != null) {
+        await setShowHexData(config['showHexData'] as bool);
+      }
+
+      return true;
+    } catch (e) {
+      print('导入配置失败: $e');
+      return false;
+    }
   }
 
   // 添加蓝牙日志

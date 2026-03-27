@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../data_center.dart';
 import '../services/ntrip_client_service.dart';
 
@@ -53,6 +55,33 @@ class _BaseStationPageState extends State<BaseStationPage> {
       _usernameController.text = lastConfig['username'] ?? '';
       _passwordController.text = lastConfig['password'] ?? '';
       _isInitialized = true;
+      
+      // 自动选中匹配的历史记录
+      _autoSelectHistoryIndex();
+    }
+  }
+
+  // 自动选中匹配的历史记录
+  void _autoSelectHistoryIndex() {
+    final history = DataCenter().baseStationHistory;
+    for (int i = 0; i < history.length; i++) {
+      final h = history[i];
+      if (h['host'] == _hostController.text &&
+          h['port'] == _portController.text &&
+          h['mountpoint'] == _mountpointController.text) {
+        setState(() {
+          _selectedHistoryIndex = i;
+        });
+        DataCenter().setSelectedHistoryIndex(i);
+        return;
+      }
+    }
+    // 如果没有匹配的记录，但有历史记录，选中最后一个
+    if (history.isNotEmpty) {
+      setState(() {
+        _selectedHistoryIndex = history.length - 1;
+      });
+      DataCenter().setSelectedHistoryIndex(history.length - 1);
     }
   }
 
@@ -87,6 +116,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
       setState(() {
         _selectedHistoryIndex = -1;
       });
+      DataCenter().setSelectedHistoryIndex(-1);
     } else if (index >= 0 && index < DataCenter().baseStationHistory.length) {
       final history = DataCenter().baseStationHistory[index];
       _hostController.text = history['host']!;
@@ -97,6 +127,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
       setState(() {
         _selectedHistoryIndex = index;
       });
+      DataCenter().setSelectedHistoryIndex(index);
     }
   }
 
@@ -163,11 +194,100 @@ class _BaseStationPageState extends State<BaseStationPage> {
     );
   }
 
+  // 导出配置
+  Future<void> _exportConfig() async {
+    // 请求存储权限（Android 10+ 需要特殊处理）
+    PermissionStatus status;
+    if (await Permission.manageExternalStorage.isGranted) {
+      status = PermissionStatus.granted;
+    } else {
+      status = await Permission.manageExternalStorage.request();
+    }
+    
+    if (!status.isGranted) {
+      // 如果管理外部存储权限被拒绝，尝试请求普通存储权限
+      status = await Permission.storage.request();
+      if (!status.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('需要存储权限才能导出配置，请在设置中开启')),
+          );
+        }
+        return;
+      }
+    }
+    
+    final filePath = await DataCenter().getConfigFilePath();
+    if (filePath != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('配置已导出到: $filePath')),
+        );
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('导出失败')),
+        );
+      }
+    }
+  }
+
+  // 导入配置
+  Future<void> _importConfig() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+
+      if (result != null && result.files.single.path != null) {
+        final filePath = result.files.single.path!;
+        final success = await DataCenter().importConfig(filePath);
+        if (success) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('配置导入成功')),
+            );
+            // 刷新页面以显示新导入的历史记录
+            setState(() {});
+            // 重新加载配置
+            _loadLastConfig();
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('配置导入失败')),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入出错: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('基站设置'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.file_upload),
+            tooltip: '导入配置',
+            onPressed: _importConfig,
+          ),
+          IconButton(
+            icon: const Icon(Icons.file_download),
+            tooltip: '导出配置',
+            onPressed: _exportConfig,
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
