@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../permission_handler_android.dart';
 import '../data_center.dart';
+import '../services/bluetooth_manager_service.dart';
 
 class BluetoothPage extends StatefulWidget {
   const BluetoothPage({super.key});
@@ -46,18 +47,44 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
   bool _filterOnlyNamed = false;
   int _rssiThreshold = -100;
   bool _showingCached = false;
+  
+  // 已连接设备列表
+  List<BluetoothDevice> _connectedDevices = [];
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
-    // 智能扫描：超过30秒才重新扫描
-    if (DataCenter().shouldRescanBluetooth()) {
+    
+    // 加载已连接设备
+    _loadConnectedDevices();
+    
+    // 监听连接设备变化
+    BluetoothManagerService().connectedDevicesStream.listen((devices) {
+      if (mounted) {
+        setState(() {
+          _connectedDevices = devices;
+        });
+      }
+    });
+    
+    // 智能扫描：有已连接设备时不扫描，超过30秒才重新扫描
+    if (_connectedDevices.isNotEmpty) {
+      // 已有连接设备，不自动扫描，只恢复之前的扫描结果
+      _restorePreviousResults();
+    } else if (DataCenter().shouldRescanBluetooth()) {
       _requestPermissionsAndScan();
     } else {
       // 恢复之前的扫描结果（如果有）
       _restorePreviousResults();
     }
+  }
+  
+  // 加载已连接设备
+  void _loadConnectedDevices() {
+    setState(() {
+      _connectedDevices = BluetoothManagerService().connectedDevices;
+    });
   }
 
   // 恢复之前的扫描结果
@@ -99,184 +126,74 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
       // 过滤缓存的设备
       return;
     }
-    _filteredResults = _scanResults.where((result) {
-      final deviceName = _getDeviceName(result).toLowerCase();
-      final deviceAddress = result.device.remoteId.str.toLowerCase();
-      final matchesSearch = _searchQuery.isEmpty ||
-          deviceName.contains(_searchQuery) ||
-          deviceAddress.contains(_searchQuery);
-
-      const isBLE = true;
-      final matchesBLE = !_filterOnlyBLE || isBLE;
-
-      final hasName = _getDeviceName(result) != 'Unknown Device';
-      final matchesNamed = !_filterOnlyNamed || hasName;
-
-      final matchesRSSI = result.rssi >= _rssiThreshold;
-
-      return matchesSearch && matchesBLE && matchesNamed && matchesRSSI;
-    }).toList();
+    setState(() {
+      _filteredResults = _scanResults.where((result) {
+        final name = _getDeviceName(result).toLowerCase();
+        final address = result.device.remoteId.str.toLowerCase();
+        final matchesSearch = name.contains(_searchQuery) || address.contains(_searchQuery);
+        final matchesBLE = !_filterOnlyBLE || _isBLEDevice(result);
+        final matchesNamed = !_filterOnlyNamed || name.isNotEmpty;
+        final matchesRssi = result.rssi >= _rssiThreshold;
+        return matchesSearch && matchesBLE && matchesNamed && matchesRssi;
+      }).toList();
+    });
   }
 
-  void _showFilterDialog() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return Container(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    '过滤选项',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  CheckboxListTile(
-                    title: const Text('只显示BLE设备'),
-                    value: _filterOnlyBLE,
-                    onChanged: (value) {
-                      setState(() {
-                        _filterOnlyBLE = value ?? false;
-                      });
-                    },
-                  ),
-                  CheckboxListTile(
-                    title: const Text('只显示名称不为空的'),
-                    value: _filterOnlyNamed,
-                    onChanged: (value) {
-                      setState(() {
-                        _filterOnlyNamed = value ?? false;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('RSSI 阈值:'),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Slider(
-                          value: _rssiThreshold.toDouble(),
-                          min: -100,
-                          max: 0,
-                          divisions: 100,
-                          label: '$_rssiThreshold dBm',
-                          onChanged: (value) {
-                            setState(() {
-                              _rssiThreshold = value.round();
-                            });
-                          },
-                        ),
-                      ),
-                      Text('$_rssiThreshold dBm', style: const TextStyle(fontSize: 12)),
-                    ],
-                  ),
-                  const SizedBox(height: 30),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      TextButton(
-                        onPressed: () {
-                          _filterOnlyBLE = false;
-                          _filterOnlyNamed = false;
-                          _rssiThreshold = -100;
-                          setState(() {
-                            _filterResults();
-                          });
-                          Navigator.of(context).pop();
-                        },
-                        child: const Text('重置'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                        },
-                        child: const Text('取消'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          setState(() {
-                            _filterResults();
-                          });
-                          Navigator.of(context).pop();
-                        },
-                        child: const Text('确定'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
+  bool _isBLEDevice(ScanResult result) {
+    // 通过广播数据判断是否为BLE设备
+    return result.advertisementData.serviceUuids.isNotEmpty ||
+           result.advertisementData.manufacturerData.isNotEmpty;
   }
 
   Future<void> _requestPermissionsAndScan() async {
     final granted = await requestPermissions();
     if (!granted) {
       setState(() {
-        _errorMessage = '需要蓝牙和位置权限才能扫描设备';
+        _errorMessage = '需要蓝牙和位置权限';
+        _isScanning = false;
       });
       return;
     }
+
     _startScan();
   }
 
   Future<void> _startScan() async {
     setState(() {
       _isScanning = true;
+      _errorMessage = null;
       _scanResults = [];
+      _filteredResults = [];
       _cachedDevices = [];
       _showingCached = false;
-      _errorMessage = null;
     });
 
     try {
+      // 确保蓝牙已开启
       final adapterState = await FlutterBluePlus.adapterState.first;
       if (adapterState != BluetoothAdapterState.on) {
         await FlutterBluePlus.turnOn();
         await Future.delayed(const Duration(seconds: 2));
       }
 
+      // 监听扫描结果
       FlutterBluePlus.scanResults.listen((results) {
         setState(() {
-          final uniqueResults = <ScanResult>[];
-          final seenAddresses = <String>{};
-
-          for (var result in results) {
-            final address = result.device.remoteId.str;
-            if (!seenAddresses.contains(address)) {
-              seenAddresses.add(address);
-              uniqueResults.add(result);
-            }
-          }
-
-          _scanResults = uniqueResults;
+          _scanResults = results;
           _filterResults();
-          
-          // 保存扫描结果到DataCenter
-          _saveScanResults();
         });
       });
 
+      // 开始扫描
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 15),
+        timeout: const Duration(seconds: 30),
       );
-      
-      // 记录扫描时间
-      await DataCenter().updateLastBluetoothScanTime();
+
+      // 扫描完成后保存结果
+      await Future.delayed(const Duration(seconds: 30));
+      _saveScanResults();
+      DataCenter().updateLastBluetoothScanTime();
+
     } catch (e) {
       setState(() {
         _errorMessage = '扫描失败: $e';
@@ -286,20 +203,6 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
         _isScanning = false;
       });
     }
-  }
-
-  String _getDeviceName(ScanResult result) {
-    if (result.advertisementData.advName.isNotEmpty) {
-      return result.advertisementData.advName;
-    }
-    if (result.device.platformName.isNotEmpty) {
-      return result.device.platformName;
-    }
-    return 'Unknown Device';
-  }
-
-  int _getRssi(ScanResult result) {
-    return result.rssi;
   }
 
   // 保存扫描结果到DataCenter
@@ -391,6 +294,19 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
     }
   }
 
+  String _getDeviceName(ScanResult result) {
+    if (result.device.platformName.isNotEmpty) {
+      return result.device.platformName;
+    } else if (result.advertisementData.advName.isNotEmpty) {
+      return result.advertisementData.advName;
+    }
+    return 'Unknown Device';
+  }
+
+  String _getRssi(ScanResult result) {
+    return result.rssi.toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -401,33 +317,17 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
             icon: const Icon(Icons.refresh),
             onPressed: _isScanning ? null : _requestPermissionsAndScan,
           ),
-          IconButton(
-            icon: const Icon(Icons.filter_list),
-            tooltip: '过滤选项',
-            onPressed: _showFilterDialog,
-          ),
         ],
       ),
       body: Column(
         children: [
-          if (_errorMessage != null)
-            Container(
-              padding: const EdgeInsets.all(16),
-              color: Colors.red[100],
-              child: Row(
-                children: [
-                  const Icon(Icons.error, color: Colors.red),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(_errorMessage!)),
-                ],
-              ),
-            ),
+          // 搜索框
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.all(8.0),
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: '根据名称或地址过滤',
+                hintText: '搜索设备名称或MAC地址',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
@@ -437,16 +337,63 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
                         },
                       )
                     : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                border: const OutlineInputBorder(),
               ),
             ),
           ),
+          // 过滤器
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
             child: Row(
+              children: [
+                FilterChip(
+                  label: const Text('仅BLE'),
+                  selected: _filterOnlyBLE,
+                  onSelected: (selected) {
+                    setState(() {
+                      _filterOnlyBLE = selected;
+                      _filterResults();
+                    });
+                  },
+                ),
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: const Text('仅命名'),
+                  selected: _filterOnlyNamed,
+                  onSelected: (selected) {
+                    setState(() {
+                      _filterOnlyNamed = selected;
+                      _filterResults();
+                    });
+                  },
+                ),
+                const SizedBox(width: 8),
+                DropdownButton<int>(
+                  value: _rssiThreshold,
+                  hint: const Text('信号强度'),
+                  items: const [
+                    DropdownMenuItem(value: -100, child: Text('全部')),
+                    DropdownMenuItem(value: -80, child: Text('>-80dBm')),
+                    DropdownMenuItem(value: -60, child: Text('>-60dBm')),
+                    DropdownMenuItem(value: -40, child: Text('>-40dBm')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _rssiThreshold = value;
+                        _filterResults();
+                      });
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          // 状态栏
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 if (_isScanning) const SizedBox(
                   width: 20,
@@ -462,6 +409,61 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
               ],
             ),
           ),
+          // 已连接设备列表
+          if (_connectedDevices.isNotEmpty)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                border: Border.all(color: Colors.green),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.bluetooth_connected, color: Colors.green[700]),
+                      const SizedBox(width: 8),
+                      Text(
+                        '已连接设备 (${_connectedDevices.length})',
+                        style: TextStyle(
+                          color: Colors.green[700],
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ..._connectedDevices.map((device) => ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.devices, size: 20),
+                    title: Text(
+                      device.platformName.isNotEmpty ? device.platformName : 'Unknown Device',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    subtitle: Text(
+                      device.remoteId.str,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => DeviceDetailPage(device: device),
+                          ),
+                        );
+                      },
+                      child: const Text('查看'),
+                    ),
+                  )),
+                ],
+              ),
+            ),
           Expanded(
             child: _buildDeviceList(),
           ),
@@ -492,7 +494,7 @@ class _DeviceScanPageState extends State<DeviceScanPage> {
       );
     }
 
-    if (_filteredResults.isEmpty && !_isScanning) {
+    if (_filteredResults.isEmpty && !_isScanning && _connectedDevices.isEmpty) {
       return const Center(child: Text('点击右上角刷新按钮开始扫描'));
     }
 
@@ -534,11 +536,35 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   bool _isConnected = false;
   bool _isLoading = false;
   String? _errorMessage;
+  BluetoothCharacteristic? _selectedNotifyCharacteristic;
+  BluetoothCharacteristic? _selectedWriteCharacteristic;
 
   @override
   void initState() {
     super.initState();
-    _connect();
+    // 恢复已选中的特征
+    _restoreSelectedCharacteristics();
+    
+    // 检查是否已连接
+    if (BluetoothManagerService().isDeviceConnected(widget.device)) {
+      _isConnected = true;
+      _loadServices();
+    } else {
+      _connect();
+    }
+  }
+  
+  // 恢复已选中的特征
+  void _restoreSelectedCharacteristics() {
+    final notifyChar = BluetoothManagerService().notifyCharacteristic;
+    final writeChar = BluetoothManagerService().writeCharacteristic;
+    
+    if (notifyChar != null) {
+      _selectedNotifyCharacteristic = notifyChar;
+    }
+    if (writeChar != null) {
+      _selectedWriteCharacteristic = writeChar;
+    }
   }
 
   Future<void> _connect() async {
@@ -550,7 +576,22 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     try {
       await widget.device.connect(timeout: const Duration(seconds: 10));
       _isConnected = true;
-      DataCenter().setBluetoothConnected(true);
+      
+      // 添加到管理器
+      BluetoothManagerService().addConnectedDevice(widget.device);
+      
+      // 监听连接状态变化
+      widget.device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected) {
+          BluetoothManagerService().removeConnectedDevice(widget.device);
+          if (mounted) {
+            setState(() {
+              _isConnected = false;
+            });
+          }
+        }
+      });
+      
       await _loadServices();
     } catch (e) {
       setState(() {
@@ -589,13 +630,56 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     return props.isEmpty ? '无' : props.join(' | ');
   }
 
-  @override
-  void dispose() {
-    if (_isConnected) {
-      widget.device.disconnect();
-      DataCenter().setBluetoothConnected(false);
+  Future<void> _subscribeToCharacteristic(BluetoothCharacteristic characteristic) async {
+    try {
+      await characteristic.setNotifyValue(true);
+      
+      // 保存到管理器
+      BluetoothManagerService().setNotifyCharacteristic(characteristic);
+      
+      // 监听通知
+      characteristic.lastValueStream.listen((value) {
+        _processReceivedData(value);
+      });
+      
+      setState(() {
+        _selectedNotifyCharacteristic = characteristic;
+      });
+      
+      // 显示成功提示
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('订阅通知成功')),
+        );
+      }
+      
+      DataCenter().addBluetoothLog('订阅特征通知: ${characteristic.uuid}');
+    } catch (e) {
+      DataCenter().addBluetoothLog('订阅失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('订阅失败: $e')),
+        );
+      }
     }
-    super.dispose();
+  }
+
+  // 处理接收到的数据，使用DataCenter进行解析和记录
+  void _processReceivedData(List<int> value) {
+    // 使用DataCenter统一处理数据（解析一次，同时记录日志和广播）
+    DataCenter().handleBluetoothData(value);
+  }
+
+  void _selectWriteCharacteristic(BluetoothCharacteristic characteristic) {
+    BluetoothManagerService().setWriteCharacteristic(characteristic);
+    setState(() {
+      _selectedWriteCharacteristic = characteristic;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已选择写入特征: ${characteristic.uuid}')),
+    );
+    DataCenter().addBluetoothLog('选择写入特征: ${characteristic.uuid}');
   }
 
   @override
@@ -605,58 +689,186 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
         title: Text(widget.device.platformName.isNotEmpty
             ? widget.device.platformName
             : '设备详情'),
+        actions: [
+          // 写入按钮
+          if (_selectedWriteCharacteristic != null)
+            IconButton(
+              icon: const Icon(Icons.edit),
+              tooltip: '发送数据',
+              onPressed: () {
+                _showWriteDialog();
+              },
+            ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _errorMessage != null
               ? Center(child: Text(_errorMessage!))
-              : ListView.builder(
-                  itemCount: _services.length,
-                  itemBuilder: (context, index) {
-                    final service = _services[index];
-                    return ExpansionTile(
-                      title: Text('服务 ${index + 1}'),
-                      subtitle: Text(service.uuid.toString()),
-                      children: service.characteristics.map((characteristic) {
-                        return ListTile(
-                          title: Text(characteristic.uuid.toString()),
-                          subtitle: Text('属性: ${_getPropertiesString(characteristic)}'),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (characteristic.properties.read)
-                                IconButton(
-                                  icon: const Icon(Icons.read_more),
-                                  onPressed: () async {
-                                    try {
-                                      final value = await characteristic.read();
-                                      DataCenter().addBluetoothLog('读取特征值: ${value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
-                                    } catch (e) {
-                                      DataCenter().addBluetoothLog('读取失败: $e');
-                                    }
-                                  },
+              : Column(
+                  children: [
+                    // 连接状态卡片
+                    if (_isConnected)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.all(8),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green[50],
+                          border: Border.all(color: Colors.green),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.bluetooth_connected, color: Colors.green[700]),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '已连接',
+                                  style: TextStyle(
+                                    color: Colors.green[700],
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                              if (characteristic.properties.notify)
-                                IconButton(
-                                  icon: const Icon(Icons.notifications),
-                                  onPressed: () async {
-                                    try {
-                                      await characteristic.setNotifyValue(true);
-                                      characteristic.lastValueStream.listen((value) {
-                                        DataCenter().addBluetoothLog('通知数据: ${value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
-                                      });
-                                    } catch (e) {
-                                      DataCenter().addBluetoothLog('订阅失败: $e');
-                                    }
-                                  },
+                              ],
+                            ),
+                            if (_selectedNotifyCharacteristic != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  '通知特征: ${_selectedNotifyCharacteristic!.uuid}',
+                                  style: const TextStyle(fontSize: 12),
                                 ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    );
-                  },
+                              ),
+                            if (_selectedWriteCharacteristic != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  '写入特征: ${_selectedWriteCharacteristic!.uuid}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    // 服务列表
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: _services.length,
+                        itemBuilder: (context, index) {
+                          final service = _services[index];
+                          return ExpansionTile(
+                            title: Text('服务 ${index + 1}'),
+                            subtitle: Text(service.uuid.toString()),
+                            children: service.characteristics.map((characteristic) {
+                              final isNotifySelected = _selectedNotifyCharacteristic?.uuid == characteristic.uuid;
+                              final isWriteSelected = _selectedWriteCharacteristic?.uuid == characteristic.uuid;
+                              
+                              return ListTile(
+                                title: Text(characteristic.uuid.toString()),
+                                subtitle: Text('属性: ${_getPropertiesString(characteristic)}'),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (characteristic.properties.read)
+                                      IconButton(
+                                        icon: const Icon(Icons.read_more),
+                                        onPressed: () async {
+                                          try {
+                                            final value = await characteristic.read();
+                                            DataCenter().addBluetoothLog('读取特征值: ${value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+                                          } catch (e) {
+                                            DataCenter().addBluetoothLog('读取失败: $e');
+                                          }
+                                        },
+                                      ),
+                                    if (characteristic.properties.notify)
+                                      IconButton(
+                                        icon: Icon(
+                                          Icons.notifications,
+                                          color: isNotifySelected ? Colors.blue : null,
+                                        ),
+                                        tooltip: isNotifySelected ? '已订阅通知' : '订阅通知',
+                                        onPressed: isNotifySelected 
+                                            ? null 
+                                            : () => _subscribeToCharacteristic(characteristic),
+                                      ),
+                                    if (characteristic.properties.write || characteristic.properties.writeWithoutResponse)
+                                      IconButton(
+                                        icon: Icon(
+                                          Icons.edit,
+                                          color: isWriteSelected ? Colors.green : null,
+                                        ),
+                                        tooltip: isWriteSelected ? '已选择为写入特征' : '选择为写入特征',
+                                        onPressed: () => _selectWriteCharacteristic(characteristic),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
+    );
+  }
+
+  void _showWriteDialog() {
+    final textController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('发送数据'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('写入特征: ${_selectedWriteCharacteristic!.uuid}'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: textController,
+              decoration: const InputDecoration(
+                hintText: '输入十六进制数据 (如: 01 02 03)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              final text = textController.text.trim();
+              if (text.isNotEmpty) {
+                try {
+                  // 解析十六进制数据
+                  final bytes = text.split(' ')
+                      .where((s) => s.isNotEmpty)
+                      .map((s) => int.parse(s, radix: 16))
+                      .toList();
+                  
+                  _selectedWriteCharacteristic!.write(bytes);
+                  DataCenter().addBluetoothLog('发送数据: $text');
+                  Navigator.pop(context);
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('数据格式错误: $e')),
+                  );
+                }
+              }
+            },
+            child: const Text('发送'),
+          ),
+        ],
+      ),
     );
   }
 }

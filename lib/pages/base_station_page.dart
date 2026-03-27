@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../data_center.dart';
@@ -25,6 +26,7 @@ class _BaseStationPageState extends State<BaseStationPage> {
   bool _isConnected = false;
   StreamSubscription<bool>? _connectionSubscription;
   bool _isInitialized = false;
+  bool _canPaste = false; // 是否可以粘贴
 
   @override
   void initState() {
@@ -43,6 +45,37 @@ class _BaseStationPageState extends State<BaseStationPage> {
 
     // 加载上次保存的配置
     _loadLastConfig();
+    
+    // 检查剪贴板内容
+    _checkClipboard();
+  }
+  
+  // 检查剪贴板是否有YAML格式的配置
+  Future<void> _checkClipboard() async {
+    try {
+      final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+      if (clipboardData != null && clipboardData.text != null) {
+        final text = clipboardData.text!;
+        // 检查是否包含YAML格式的基站配置
+        if (_isValidYamlConfig(text)) {
+          if (mounted) {
+            setState(() {
+              _canPaste = true;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      print('检查剪贴板失败: $e');
+    }
+  }
+  
+  // 检查文本是否是有效的YAML配置
+  bool _isValidYamlConfig(String text) {
+    // 检查是否包含必要的字段
+    return text.contains('host:') && 
+           text.contains('port:') && 
+           (text.contains('mountpoint:') || text.contains('username:'));
   }
 
   // 加载上次保存的配置
@@ -271,6 +304,126 @@ class _BaseStationPageState extends State<BaseStationPage> {
     }
   }
 
+  // 复制配置到剪贴板（YAML格式）
+  Future<void> _copyConfig() async {
+    final config = {
+      'host': _hostController.text,
+      'port': _portController.text,
+      'mountpoint': _mountpointController.text,
+      'username': _usernameController.text,
+      'password': _passwordController.text,
+    };
+    
+    // 生成YAML格式
+    final yamlBuffer = StringBuffer();
+    yamlBuffer.writeln('# BLE Explorer');
+    yamlBuffer.writeln('# 复制此消息到应用内粘贴');
+    yamlBuffer.writeln();
+    config.forEach((key, value) {
+      if (value.isNotEmpty) {
+        yamlBuffer.writeln('$key: $value');
+      }
+    });
+    
+    final yamlText = yamlBuffer.toString();
+    
+    try {
+      await Clipboard.setData(ClipboardData(text: yamlText));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('配置已复制到剪贴板')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('复制失败: $e')),
+        );
+      }
+    }
+  }
+
+  // 从剪贴板粘贴配置
+  Future<void> _pasteConfig() async {
+    try {
+      final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+      if (clipboardData == null || clipboardData.text == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('剪贴板为空')),
+          );
+        }
+        return;
+      }
+      
+      final text = clipboardData.text!;
+      if (!_isValidYamlConfig(text)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('剪贴板中没有有效的配置')),
+          );
+        }
+        return;
+      }
+      
+      // 解析YAML格式
+      final config = _parseYamlConfig(text);
+      
+      // 应用到输入框
+      setState(() {
+        _hostController.text = config['host'] ?? '';
+        _portController.text = config['port'] ?? '';
+        _mountpointController.text = config['mountpoint'] ?? '';
+        _usernameController.text = config['username'] ?? '';
+        _passwordController.text = config['password'] ?? '';
+        _selectedHistoryIndex = -1; // 重置历史记录选择
+      });
+      
+      // 保存当前配置
+      _saveCurrentConfig();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('配置已粘贴')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('粘贴失败: $e')),
+        );
+      }
+    }
+  }
+  
+  // 解析YAML格式的配置
+  Map<String, String> _parseYamlConfig(String text) {
+    final config = <String, String>{};
+    final lines = text.split('\n');
+    
+    for (final line in lines) {
+      final trimmedLine = line.trim();
+      // 跳过空行和注释
+      if (trimmedLine.isEmpty || trimmedLine.startsWith('#')) {
+        continue;
+      }
+      
+      // 解析 key: value 格式
+      final colonIndex = trimmedLine.indexOf(':');
+      if (colonIndex > 0) {
+        final key = trimmedLine.substring(0, colonIndex).trim();
+        final value = trimmedLine.substring(colonIndex + 1).trim();
+        
+        if (key == 'host' || key == 'port' || key == 'mountpoint' || 
+            key == 'username' || key == 'password') {
+          config[key] = value;
+        }
+      }
+    }
+    
+    return config;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -389,7 +542,35 @@ class _BaseStationPageState extends State<BaseStationPage> {
               obscureText: !_isPasswordVisible,
               onChanged: (_) => _saveCurrentConfig(),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            // 复制和粘贴按钮行
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _copyConfig,
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: const Text('复制配置'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 40),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _canPaste ? _pasteConfig : null,
+                    icon: Icon(Icons.paste, size: 18, color: _canPaste ? null : Colors.grey),
+                    label: Text('粘贴配置', style: TextStyle(color: _canPaste ? null : Colors.grey)),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 40),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
 
             // 连接/断开按钮
             if (_isConnecting)

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'pages/bluetooth_page.dart';
 import 'pages/base_station_page.dart';
 import 'pages/log_page.dart';
+import 'pages/map_page.dart';
 
 void main() {
   runApp(const BLEExplorerApp());
@@ -37,6 +38,7 @@ class _MainPageState extends State<MainPage> {
     const BluetoothPage(),
     const BaseStationPage(),
     const LogPage(),
+    const MapPage(),
   ];
 
   @override
@@ -62,6 +64,10 @@ class _MainPageState extends State<MainPage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.text_snippet),
             label: '日志',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map),
+            label: '地图',
           ),
         ],
       ),

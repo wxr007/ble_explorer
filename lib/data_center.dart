@@ -354,4 +354,146 @@ class DataCenter {
     _baseStationLogController.close();
     _showHexDataController.close();
   }
+
+  // ==================== 蓝牙数据处理 ====================
+
+  // 统一的蓝牙数据处理入口：解析一次，同时记录日志和广播
+  void handleBluetoothData(List<int> data) {
+    if (data.isEmpty) return;
+
+    // 只解析一次
+    final entries = _parseBluetoothData(data);
+
+    // 1. 记录到日志
+    for (final entry in entries) {
+      addBluetoothLog('${entry.prefix}: ${entry.content}');
+    }
+
+    // 2. 广播给所有订阅者（如果有的话）
+    for (final entry in entries) {
+      _bluetoothDataController.add(entry);
+    }
+  }
+
+  // 解析蓝牙数据，返回格式化后的数据列表
+  List<BluetoothDataEntry> _parseBluetoothData(List<int> data) {
+    final result = <BluetoothDataEntry>[];
+
+    // 尝试将数据解析为ASCII字符串
+    String asciiString;
+    try {
+      asciiString = String.fromCharCodes(data);
+    } catch (e) {
+      // 解析失败，按二进制处理
+      result.add(_createBinaryEntry(data));
+      return result;
+    }
+
+    // 检查是否是NMEA格式（以$或!开头）
+    if (_isNmeaData(asciiString)) {
+      // 提取NMEA句子（可能包含多个）
+      final nmeaSentences = _extractNmeaSentences(asciiString);
+      for (final sentence in nmeaSentences) {
+        result.add(BluetoothDataEntry(
+          prefix: 'NMEA',
+          content: sentence,
+          rawData: data,
+          dataType: BluetoothDataType.nmea,
+        ));
+      }
+    } else if (_isAsciiPrintable(asciiString)) {
+      // 可打印ASCII但不是NMEA
+      result.add(BluetoothDataEntry(
+        prefix: 'ASCII',
+        content: asciiString.trim(),
+        rawData: data,
+        dataType: BluetoothDataType.ascii,
+      ));
+    } else {
+      // 包含不可打印字符，按二进制处理
+      result.add(_createBinaryEntry(data));
+    }
+
+    return result;
+  }
+
+  // 创建二进制数据条目
+  BluetoothDataEntry _createBinaryEntry(List<int> data) {
+    if (_showHexData) {
+      return BluetoothDataEntry(
+        prefix: 'BIN',
+        content: data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
+        rawData: data,
+        dataType: BluetoothDataType.binary,
+      );
+    } else {
+      return BluetoothDataEntry(
+        prefix: 'DATA',
+        content: '${data.length} 字节',
+        rawData: data,
+        dataType: BluetoothDataType.binary,
+      );
+    }
+  }
+
+  // 检查是否是NMEA格式数据
+  bool _isNmeaData(String data) {
+    // NMEA以$或!开头
+    return data.trim().startsWith(r'$') || data.trim().startsWith('!');
+  }
+
+  // 提取NMEA句子
+  List<String> _extractNmeaSentences(String data) {
+    final sentences = <String>[];
+    // 按行分割
+    final lines = data.split(RegExp(r'[\r\n]+'));
+    for (final line in lines) {
+      final trimmed = line.trim();
+      if (trimmed.isNotEmpty && (trimmed.startsWith(r'$') || trimmed.startsWith('!'))) {
+        sentences.add(trimmed);
+      }
+    }
+    return sentences;
+  }
+
+  // 检查是否全是可打印ASCII字符
+  bool _isAsciiPrintable(String data) {
+    for (final char in data.codeUnits) {
+      // 允许可打印字符(32-126)、换行(10)、回车(13)、制表符(9)
+      if ((char < 32 || char > 126) && char != 10 && char != 13 && char != 9) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // 数据流控制器，用于向其他组件发送解析后的数据
+  final StreamController<BluetoothDataEntry> _bluetoothDataController = 
+      StreamController<BluetoothDataEntry>.broadcast();
+  Stream<BluetoothDataEntry> get bluetoothDataStream => _bluetoothDataController.stream;
+}
+
+// 蓝牙数据类型枚举
+enum BluetoothDataType {
+  nmea,    // NMEA格式数据
+  ascii,   // 可打印ASCII文本
+  binary,  // 二进制数据
+}
+
+// 蓝牙数据条目类
+class BluetoothDataEntry {
+  final String prefix;        // 日志前缀 (NMEA/ASCII/BIN/DATA)
+  final String content;       // 格式化后的内容
+  final List<int> rawData;    // 原始字节数据
+  final BluetoothDataType dataType;  // 数据类型
+
+  BluetoothDataEntry({
+    required this.prefix,
+    required this.content,
+    required this.rawData,
+    required this.dataType,
+  });
+
+  @override
+  String toString() => '$prefix: $content';
 }
