@@ -13,16 +13,16 @@ class MapPage extends StatefulWidget {
 class _MapPageState extends State<MapPage> {
   // 地图控制器
   final MapController _mapController = MapController();
-  
-  // 当前位置
+
+  // 当前位置（GPS设备位置）
   LatLng? _currentPosition;
-  
+
   // 位置历史（用于绘制轨迹）
   final List<LatLng> _positionHistory = [];
-  
+
   // 最新GGA数据
   GgaData? _latestGga;
-  
+
   // 是否跟随位置
   bool _followPosition = true;
 
@@ -49,13 +49,13 @@ class _MapPageState extends State<MapPage> {
           _latestGga = gga;
           _currentPosition = LatLng(gga.latitude, gga.longitude);
           _positionHistory.add(_currentPosition!);
-          
+
           // 限制历史记录数量
           if (_positionHistory.length > 1000) {
             _positionHistory.removeAt(0);
           }
         });
-        
+
         // 如果开启跟随，移动地图到当前位置
         if (_followPosition) {
           _mapController.move(_currentPosition!, 18);
@@ -99,10 +99,10 @@ class _MapPageState extends State<MapPage> {
 
       // 解析定位状态
       final quality = int.tryParse(parts[6]) ?? 0;
-      
+
       // 解析卫星数量
       final satellites = int.tryParse(parts[7]) ?? 0;
-      
+
       // 解析海拔高度
       final altitude = double.tryParse(parts[9]) ?? 0.0;
 
@@ -159,15 +159,16 @@ class _MapPageState extends State<MapPage> {
             child: FlutterMap(
               mapController: _mapController,
               options: MapOptions(
-                initialCenter: _currentPosition ?? const LatLng(39.9042, 116.4074), // 默认北京
+                initialCenter: const LatLng(39.9042, 116.4074), // 默认北京
                 initialZoom: 13.0,
                 minZoom: 3.0,
                 maxZoom: 22.0,
               ),
               children: [
-                // 地图瓦片层 - 使用OpenStreetMap
+                // 地图瓦片层 - 使用高德地图
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  urlTemplate: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+                  subdomains: const ['1', '2', '3', '4'],
                   userAgentPackageName: 'com.example.ble_explorer',
                 ),
                 // 轨迹线
@@ -181,8 +182,8 @@ class _MapPageState extends State<MapPage> {
                       ),
                     ],
                   ),
-                // 当前位置标记
-                if (_currentPosition != null)
+                // GPS设备位置标记（红色）
+                if (_latestGga != null && _currentPosition != null)
                   MarkerLayer(
                     markers: [
                       Marker(
@@ -217,6 +218,17 @@ class _MapPageState extends State<MapPage> {
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.location_on, color: Colors.red, size: 16),
+                          const SizedBox(width: 4),
+                          const Text(
+                            'GPS设备位置',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       Row(
                         children: [
                           Expanded(
@@ -271,8 +283,9 @@ class _MapPageState extends State<MapPage> {
                     ],
                   )
                 : const Text(
-                    '等待GPS数据...',
+                    '等待GPS数据...\n请连接蓝牙GPS设备并订阅GGA数据',
                     style: TextStyle(fontSize: 14, color: Colors.grey),
+                    textAlign: TextAlign.center,
                   ),
           ),
         ],

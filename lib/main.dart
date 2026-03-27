@@ -52,6 +52,8 @@ class _MainPageState extends State<MainPage> {
             _currentIndex = index;
           });
         },
+        selectedItemColor: Colors.blue,
+        unselectedItemColor: Colors.grey[700],
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.bluetooth),
