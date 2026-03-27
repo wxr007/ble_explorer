@@ -121,7 +121,13 @@ try {
 ```
 ble_explorer/
 ├── lib/
-│   └── main.dart              # All app code (single file)
+│   ├── main.dart              # App entry point with bottom navigation
+│   ├── data_center.dart       # Global data management class
+│   ├── permission_handler_android.dart  # Permission handling
+│   └── pages/
+│       ├── bluetooth_page.dart    # BLE device scanning page
+│       ├── base_station_page.dart # Base station connection page
+│       └── log_page.dart          # Log display page
 ├── android/
 │   ├── app/src/main/
 │   │   └── AndroidManifest.xml  # BLE permissions
@@ -131,6 +137,63 @@ ble_explorer/
 └── test/
     └── widget_test.dart
 ```
+
+## Data Center (数据管理中心)
+
+`DataCenter` 是一个单例类，用于管理应用中的全局数据流转：
+
+### 功能
+- **蓝牙日志管理**: 添加、获取、清空蓝牙相关日志
+- **基站日志管理**: 添加、获取、清空基站相关日志
+- **历史记录管理**: 保存和获取基站连接历史
+- **连接状态管理**: 跟踪蓝牙和基站的连接状态
+- **数据流**: 提供 Stream 接口实时监听日志更新
+
+### 使用方式
+```dart
+// 获取实例
+final dataCenter = DataCenter();
+
+// 添加日志
+DataCenter().addBluetoothLog('扫描到设备');
+DataCenter().addBaseStationLog('连接成功');
+
+// 获取日志文本
+String logs = DataCenter().getBluetoothLogsText();
+
+// 监听日志更新
+DataCenter().bluetoothLogStream.listen((log) {
+  // 更新UI
+});
+```
+
+## New Features Added
+
+### Bottom Navigation Bar
+- Added bottom navigation bar with three tabs:
+  1. **蓝牙** - BLE device scanning and exploration
+  2. **基站** - Base station connection settings
+  3. **日志** - Log display for Bluetooth and base station
+
+### Base Station Page
+- Input fields for:
+  - 主机 (Host)
+  - 端口 (Port)
+  - 挂载点 (Mountpoint)
+  - 用户名 (Username)
+  - 密码 (Password)
+- History dropdown to save and load previous connections
+- **新建连接**: Selecting "新建连接" clears all input fields
+- Connect button to establish connection
+- Auto-saves connection history to DataCenter
+
+### Log Page
+- Two multi-line text fields to display:
+  - 蓝牙日志 (Bluetooth logs) - Full height utilization
+  - 基站日志 (Base station logs) - Full height utilization
+- Real-time log updates via DataCenter streams
+- Clear logs button in app bar
+- Optimized layout with minimal padding
 
 ## Dependencies
 
