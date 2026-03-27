@@ -54,6 +54,7 @@ class _MainPageState extends State<MainPage> {
         },
         selectedItemColor: Colors.blue,
         unselectedItemColor: Colors.grey[700],
+        type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.bluetooth),

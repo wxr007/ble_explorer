@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:location/location.dart';
 import '../data_center.dart';
 
 class MapPage extends StatefulWidget {
@@ -14,8 +16,11 @@ class _MapPageState extends State<MapPage> {
   // 地图控制器
   final MapController _mapController = MapController();
 
-  // 当前位置（GPS设备位置）
+  // 当前位置（优先使用GPS设备位置，否则使用手机位置）
   LatLng? _currentPosition;
+
+  // 手机位置
+  LatLng? _phonePosition;
 
   // 位置历史（用于绘制轨迹）
   final List<LatLng> _positionHistory = [];
@@ -26,17 +31,212 @@ class _MapPageState extends State<MapPage> {
   // 是否跟随位置
   bool _followPosition = true;
 
+  // 是否正在获取手机定位
+  bool _isGettingPhoneLocation = false;
+
+  // 调试信息
+  String _debugInfo = '';
+
+  // 是否使用卫星底图
+  bool _useSatelliteMap = false;
+
+  // Location 实例
+  final Location _location = Location();
+
   @override
   void initState() {
     super.initState();
     // 订阅蓝牙数据流
     DataCenter().bluetoothDataStream.listen(_onBluetoothData);
+    // 获取手机定位
+    _getPhoneLocation();
   }
 
   @override
   void dispose() {
     _mapController.dispose();
     super.dispose();
+  }
+
+  // 位置更新订阅
+  StreamSubscription<LocationData>? _locationSubscription;
+
+  // 获取手机定位
+  Future<void> _getPhoneLocation() async {
+    setState(() {
+      _isGettingPhoneLocation = true;
+      _debugInfo = '开始获取定位...';
+    });
+
+    try {
+      // 检查定位服务是否开启
+      _updateDebugInfo('检查定位服务...');
+      bool serviceEnabled = await _location.serviceEnabled();
+      _updateDebugInfo('定位服务状态: $serviceEnabled');
+
+      if (!serviceEnabled) {
+        _updateDebugInfo('请求开启定位服务...');
+        serviceEnabled = await _location.requestService();
+        _updateDebugInfo('用户响应定位服务: $serviceEnabled');
+
+        if (!serviceEnabled) {
+          setState(() {
+            _isGettingPhoneLocation = false;
+            _debugInfo = '定位服务未开启';
+          });
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('请开启手机定位服务')),
+            );
+          }
+          return;
+        }
+      }
+
+      // 检查权限
+      _updateDebugInfo('检查定位权限...');
+      PermissionStatus permission = await _location.hasPermission();
+      _updateDebugInfo('当前权限状态: $permission');
+
+      if (permission == PermissionStatus.denied) {
+        _updateDebugInfo('请求定位权限...');
+        permission = await _location.requestPermission();
+        _updateDebugInfo('用户响应权限: $permission');
+
+        if (permission != PermissionStatus.granted) {
+          setState(() {
+            _isGettingPhoneLocation = false;
+            _debugInfo = '定位权限被拒绝';
+          });
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('定位权限被拒绝')),
+            );
+          }
+          return;
+        }
+      }
+
+      if (permission == PermissionStatus.deniedForever) {
+        setState(() {
+          _isGettingPhoneLocation = false;
+          _debugInfo = '定位权限被永久拒绝';
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('定位权限被永久拒绝，请在设置中开启')),
+          );
+        }
+        return;
+      }
+
+      // 配置定位参数
+      _updateDebugInfo('配置定位参数...');
+      await _location.changeSettings(
+        accuracy: LocationAccuracy.high,
+        interval: 1000,
+        distanceFilter: 0,
+      );
+
+      // 先尝试获取一次当前位置（快速返回）
+      _updateDebugInfo('尝试快速获取位置...');
+      try {
+        LocationData locationData = await _location.getLocation().timeout(
+          const Duration(seconds: 5),
+        );
+
+        if (locationData.latitude != null && locationData.longitude != null) {
+          _updateDebugInfo('快速获取成功: lat=${locationData.latitude}, lng=${locationData.longitude}');
+          _updatePhonePosition(locationData);
+          return;
+        } else {
+          _updateDebugInfo('快速获取返回空位置');
+        }
+      } on TimeoutException {
+        _updateDebugInfo('快速获取超时，开始持续监听...');
+      } catch (e) {
+        _updateDebugInfo('快速获取失败: $e');
+      }
+
+      // 如果快速获取失败，使用持续监听
+      _updateDebugInfo('开始持续监听位置更新...');
+
+      // 取消之前的订阅
+      await _locationSubscription?.cancel();
+
+      // 设置超时
+      Timer? timeoutTimer;
+      timeoutTimer = Timer(const Duration(seconds: 60), () {
+        _locationSubscription?.cancel();
+        setState(() {
+          _isGettingPhoneLocation = false;
+          _debugInfo = '持续监听超时（60秒），请检查GPS信号';
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('获取定位超时，请确保在室外或开启WiFi')),
+          );
+        }
+      });
+
+      // 监听位置更新
+      _locationSubscription = _location.onLocationChanged.listen(
+        (LocationData locationData) {
+          timeoutTimer?.cancel();
+          _updateDebugInfo('监听到位置更新: lat=${locationData.latitude}, lng=${locationData.longitude}');
+          _updatePhonePosition(locationData);
+        },
+        onError: (error) {
+          timeoutTimer?.cancel();
+          _updateDebugInfo('位置监听错误: $error');
+          setState(() {
+            _isGettingPhoneLocation = false;
+            _debugInfo = '位置监听错误: $error';
+          });
+        },
+      );
+    } catch (e, stackTrace) {
+      setState(() {
+        _isGettingPhoneLocation = false;
+        _debugInfo = '错误: $e';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('获取手机定位失败: $e')),
+        );
+      }
+    }
+  }
+
+  // 更新手机位置
+  void _updatePhonePosition(LocationData locationData) {
+    if (locationData.latitude != null && locationData.longitude != null) {
+      setState(() {
+        _phonePosition = LatLng(locationData.latitude!, locationData.longitude!);
+        // 如果还没有GPS设备位置，使用手机位置作为当前位置
+        if (_currentPosition == null) {
+          _currentPosition = _phonePosition;
+        }
+        _isGettingPhoneLocation = false;
+        _debugInfo = '定位成功: ${_phonePosition!.latitude.toStringAsFixed(6)}, ${_phonePosition!.longitude.toStringAsFixed(6)}';
+      });
+
+      // 如果开启跟随且没有GPS位置，移动地图到手机位置
+      if (_followPosition && _latestGga == null && _phonePosition != null) {
+        _mapController.move(_phonePosition!, 15);
+      }
+
+      // 取消订阅，因为我们已经获取到位置了
+      _locationSubscription?.cancel();
+      _locationSubscription = null;
+    }
+  }
+
+  void _updateDebugInfo(String info) {
+    setState(() {
+      _debugInfo = info;
+    });
+    debugPrint('[MapPage] $info');
   }
 
   // 处理蓝牙数据
@@ -128,6 +328,29 @@ class _MapPageState extends State<MapPage> {
       appBar: AppBar(
         title: const Text('地图定位'),
         actions: [
+          // 切换卫星底图
+          IconButton(
+            icon: Icon(_useSatelliteMap ? Icons.map : Icons.satellite),
+            tooltip: _useSatelliteMap ? '切换街道图' : '切换卫星图',
+            onPressed: () {
+              setState(() {
+                _useSatelliteMap = !_useSatelliteMap;
+              });
+            },
+          ),
+          // 回到正北方向
+          IconButton(
+            icon: const Icon(Icons.explore),
+            tooltip: '回到正北',
+            onPressed: () {
+              _mapController.rotate(0);
+            },
+          ),
+          // 刷新手机定位
+          IconButton(
+            icon: const Icon(Icons.my_location),
+            onPressed: _isGettingPhoneLocation ? null : _getPhoneLocation,
+          ),
           // 跟随位置开关
           IconButton(
             icon: Icon(_followPosition ? Icons.gps_fixed : Icons.gps_not_fixed),
@@ -159,18 +382,27 @@ class _MapPageState extends State<MapPage> {
             child: FlutterMap(
               mapController: _mapController,
               options: MapOptions(
-                initialCenter: const LatLng(39.9042, 116.4074), // 默认北京
+                initialCenter: _currentPosition ?? const LatLng(39.9042, 116.4074), // 默认北京
                 initialZoom: 13.0,
                 minZoom: 3.0,
                 maxZoom: 22.0,
               ),
               children: [
-                // 地图瓦片层 - 使用高德地图
-                TileLayer(
-                  urlTemplate: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-                  subdomains: const ['1', '2', '3', '4'],
-                  userAgentPackageName: 'com.example.ble_explorer',
-                ),
+                // 地图瓦片层 - 根据设置切换街道图或卫星图
+                if (_useSatelliteMap)
+                  // 高德卫星图
+                  TileLayer(
+                    urlTemplate: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+                    subdomains: const ['1', '2', '3', '4'],
+                    userAgentPackageName: 'com.example.ble_explorer',
+                  )
+                else
+                  // 高德街道图
+                  TileLayer(
+                    urlTemplate: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+                    subdomains: const ['1', '2', '3', '4'],
+                    userAgentPackageName: 'com.example.ble_explorer',
+                  ),
                 // 轨迹线
                 if (_positionHistory.length > 1)
                   PolylineLayer(
@@ -179,6 +411,22 @@ class _MapPageState extends State<MapPage> {
                         points: _positionHistory,
                         strokeWidth: 4.0,
                         color: Colors.blue,
+                      ),
+                    ],
+                  ),
+                // 手机位置标记（蓝色，只在没有GPS位置时显示）
+                if (_phonePosition != null && _latestGga == null)
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        width: 40.0,
+                        height: 40.0,
+                        point: _phonePosition!,
+                        child: const Icon(
+                          Icons.location_on,
+                          color: Colors.blue,
+                          size: 40.0,
+                        ),
                       ),
                     ],
                   ),
@@ -214,8 +462,42 @@ class _MapPageState extends State<MapPage> {
                 ),
               ],
             ),
-            child: _latestGga != null
-                ? Column(
+            child: Column(
+              children: [
+                // 调试信息显示
+                if (_debugInfo.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8.0),
+                    margin: const EdgeInsets.only(bottom: 8.0),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(4.0),
+                    ),
+                    child: Text(
+                      '调试: $_debugInfo',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ),
+                // 定位状态显示
+                if (_isGettingPhoneLocation)
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Text('正在获取手机定位...'),
+                    ],
+                  )
+                else if (_latestGga != null)
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
@@ -282,11 +564,47 @@ class _MapPageState extends State<MapPage> {
                       ),
                     ],
                   )
-                : const Text(
-                    '等待GPS数据...\n请连接蓝牙GPS设备并订阅GGA数据',
+                else if (_phonePosition != null)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.location_on, color: Colors.blue, size: 16),
+                          const SizedBox(width: 4),
+                          const Text(
+                            '手机定位',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '纬度: ${_phonePosition!.latitude.toStringAsFixed(6)}°',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                          Expanded(
+                            child: Text(
+                              '经度: ${_phonePosition!.longitude.toStringAsFixed(6)}°',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  )
+                else
+                  const Text(
+                    '等待定位数据...\n请确保GPS设备已连接或手机定位已开启',
                     style: TextStyle(fontSize: 14, color: Colors.grey),
                     textAlign: TextAlign.center,
                   ),
+              ],
+            ),
           ),
         ],
       ),
